@@ -2,8 +2,11 @@ import asyncio
 import websockets
 import json
 import os
+import requests
 
 rooms = {}
+
+TRANSLATE_API = "https://ouivocal-api.onrender.com/translate"
 
 
 # =========================
@@ -12,8 +15,44 @@ rooms = {}
 async def safe_send(ws, data):
     try:
         await ws.send(json.dumps(data))
-    except:
-        pass
+    except Exception as e:
+        print("Send failed:", e)
+
+
+# =========================
+# TRANSLATE TEXT
+# =========================
+def translate_text(text, direction):
+
+    try:
+
+        response = requests.post(
+            TRANSLATE_API,
+            json={
+                "text": text,
+                "direction": direction,
+                "gender": "female"
+            },
+            timeout=20
+        )
+
+        if response.status_code == 200:
+
+            data = response.json()
+
+            return data.get(
+                "translated",
+                text
+            )
+
+    except Exception as e:
+
+        print(
+            "Translation error:",
+            e
+        )
+
+    return text
 
 
 # =========================
@@ -47,7 +86,6 @@ async def handler(ws):
                 if room_id not in rooms:
                     rooms[room_id] = []
 
-                # LIMIT TO 2 USERS
                 if len(rooms[room_id]) >= 2:
 
                     await safe_send(ws, {
@@ -58,7 +96,9 @@ async def handler(ws):
 
                 rooms[room_id].append(ws)
 
-                print(f"✅ User joined room: {room_id}")
+                print(
+                    f"✅ User joined room: {room_id}"
+                )
 
                 # WAITING
                 if len(rooms[room_id]) == 1:
@@ -82,44 +122,40 @@ async def handler(ws):
             elif data.get("type") == "chat":
 
                 message_text = data.get("message")
-                direction = data.get("direction", "en-fr")
+                direction = data.get(
+                    "direction",
+                    "en-fr"
+                )
 
                 if not message_text:
                     continue
 
-                # 🔥 SIMPLE TRANSLATION
-                translated = message_text
+                translated = translate_text(
+                    message_text,
+                    direction
+                )
 
-                try:
+                print(
+                    "🌍 Translation:",
+                    translated
+                )
 
-                    # EN → FR
-                    if direction == "en-fr":
-
-                        translated = f"[FR] {message_text}"
-
-                    # FR → EN
-                    else:
-
-                        translated = f"[EN] {message_text}"
-
-                except Exception as e:
-                    print("Translation failed:", e)
-
-                # SEND TO OTHER USER
                 if room_id in rooms:
 
                     for client in rooms[room_id]:
 
                         if client != ws:
 
-                            await safe_send(client, {
-                                "type": "chat",
-                                "original": message_text,
-                                "translated": translated
-                            })
+                            await safe_send(
+                                client,
+                                {
+                                    "type": "chat",
+                                    "translated": translated
+                                }
+                            )
 
             # =========================
-            # SIGNALING (WEBRTC)
+            # WEBRTC SIGNALING
             # =========================
             elif data.get("type") in [
                 "offer",
@@ -134,7 +170,11 @@ async def handler(ws):
                     for client in rooms[room_id]:
 
                         if client != ws:
-                            await safe_send(client, data)
+
+                            await safe_send(
+                                client,
+                                data
+                            )
 
             # =========================
             # LIVE TRANSLATED AUDIO
@@ -150,37 +190,52 @@ async def handler(ws):
 
                         if client != ws:
 
-                            await safe_send(client, {
-                                "type": "translated_audio",
-                                "audio": data["audio"]
-                            })
+                            await safe_send(
+                                client,
+                                {
+                                    "type":
+                                    "translated_audio",
+                                    "audio":
+                                    data["audio"]
+                                }
+                            )
 
     except Exception as e:
 
-        print("❌ Client disconnected:", e)
+        print(
+            "❌ Client disconnected:",
+            e
+        )
 
     finally:
 
-        # REMOVE USER
-        if room_id in rooms and ws in rooms[room_id]:
+        if (
+            room_id in rooms and
+            ws in rooms[room_id]
+        ):
 
             rooms[room_id].remove(ws)
 
-            print(f"❌ User left room: {room_id}")
+            print(
+                f"❌ User left room: {room_id}"
+            )
 
-            # NOTIFY REMAINING USER
             for client in rooms[room_id]:
 
-                await safe_send(client, {
-                    "type": "waiting"
-                })
+                await safe_send(
+                    client,
+                    {
+                        "type": "waiting"
+                    }
+                )
 
-            # DELETE EMPTY ROOM
             if len(rooms[room_id]) == 0:
 
                 del rooms[room_id]
 
-                print(f"🗑 Room deleted: {room_id}")
+                print(
+                    f"🗑 Room deleted: {room_id}"
+                )
 
 
 # =========================
@@ -188,13 +243,19 @@ async def handler(ws):
 # =========================
 PORT = int(os.environ.get("PORT", 10000))
 
-start_server = websockets.serve(
-    handler,
-    "0.0.0.0",
-    PORT
-)
+async def main():
 
-print(f"🚀 WebSocket server running on port {PORT}")
+    async with websockets.serve(
+        handler,
+        "0.0.0.0",
+        PORT
+    ):
 
-asyncio.get_event_loop().run_until_complete(start_server)
-asyncio.get_event_loop().run_forever()
+        print(
+            f"🚀 WebSocket server running on port {PORT}"
+        )
+
+        await asyncio.Future()
+
+if __name__ == "__main__":
+    asyncio.run(main())
